@@ -229,7 +229,91 @@ The request logger logs every request on completion:
 
 ---
 
-## Principle 5 — Tests define the contract
+## Principle 5 — Observability is your canary
+
+You cannot fix what you cannot see. Your application talks to multiple dependencies — PostgreSQL, Redis, S3, email providers, payment gateways, webhook endpoints. Any one of them can fail or slow down. You must know which one, instantly.
+
+Health endpoints — three of them, always present
+
+```
+GET /health           liveness — no dependency checks, always 200 if process is alive
+GET /health/ready     readiness — checks DB and cache, 503 if any dependency is down
+GET /health/details   full diagnostics with latencies — auth-gated, for ops use only
+```
+
+The /health/ready endpoint is what your load balancer or Kubernetes uses to know if the pod should receive traffic. If Postgres is unreachable, return 503. The pod gets removed from rotation.
+
+The /health/details endpoint shows every dependency, its current status, and its latency from the last check. This endpoint is auth-gated — only admins or monitoring systems with a valid token can access it.
+
+Metrics — every dependency is measured
+
+Export metrics for every operation that touches an external system:
+
+```
+http_requests_total{method, path, status}
+http_request_duration_seconds{method, path}
+
+db_queries_total{operation, table, status}
+db_query_duration_seconds{operation, table}
+
+cache_hits_total{cache_name}
+cache_misses_total{cache_name}
+cache_operation_duration_seconds{cache_name, operation}
+
+external_calls_total{service, endpoint, status}
+external_call_duration_seconds{service, endpoint}
+```
+
+All metrics are exposed at /metrics in a format Prometheus can scrape.
+
+Traces — follow a request across every boundary
+
+Every request gets a unique traceId at the entry point (same traceId used in structured logging). That traceId travels through:
+
+· The HTTP handler
+· The service layer
+· Every database query
+· Every Redis operation
+· Every external API call
+
+When you look at Jaeger, you see a waterfall timeline. You see exactly where time was spent. You see that 2.8 seconds of a 3 second request was spent waiting on the email provider. No guessing.
+
+OpenTelemetry (OTEL) is the standard
+
+Instrument your application using OpenTelemetry SDKs. Most language SDKs auto-instrument standard libraries:
+
+· PostgreSQL drivers
+· Redis clients
+· HTTP clients and servers
+
+You add a few lines of setup code. The SDK automatically creates spans, captures attributes, and propagates trace context.
+
+Export telemetry to:
+
+· Prometheus — metrics storage and alerting
+· Jaeger — trace storage and querying
+· Grafana — dashboards that show everything in one place
+
+Minimum dashboards every project has
+
+Dependency health dashboard: one panel per dependency showing status, success rate, and p95 latency over time. Red lights when something is failing.
+
+Request dashboard: request rate, error rate (by HTTP status), and p95 latency per endpoint. Alert when error rate exceeds 5% for 2 minutes.
+
+Resource dashboard: CPU, memory, open file descriptors, goroutines / threads.
+
+Rules
+
+Every external dependency is health-checked. Every dependency has metrics for success/failure and latency. Every request is traceable from entry to exit.
+
+If a new external dependency is added, it gets health checks and metrics before it is used in production.
+
+Observability is not optional. No observability = no deployment.
+
+---
+
+## Principle 6 — Tests define the contract
+
 
 Writing tests alongside the code forces you to think about failure modes
 before you write the happy path. That changes how you design the function.
